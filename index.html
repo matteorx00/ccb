@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>COIN COIN BLÉ</title>
+<style>
+  :root{
+    --sky1:#6db4e8; --sky2:#bfe3f5; --ink:#241a10; --paper:#fff7e6;
+    --wood:#7a4a1e; --wood2:#5c3414; --gold:#ffcc33; --gold2:#e0a800;
+    --grass:#62b552; --grass2:#3f9a36; --panel:rgba(255,247,230,.96);
+    --shadow:0 14px 40px rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:'Trebuchet MS','Segoe UI',system-ui,sans-serif;
+    color:var(--ink); overflow:hidden;
+    background:linear-gradient(180deg,var(--sky1) 0%, var(--sky2) 70%, var(--grass) 70%, var(--grass2) 100%);
+  }
+  .mono{font-family:'Courier New',monospace}
+  #bg{position:fixed;inset:0;z-index:0;overflow:hidden}
+  .hill{position:absolute;bottom:30%;background:var(--grass);border-radius:50% 50% 0 0;opacity:.9}
+  .hill.b{background:var(--grass2);opacity:.7}
+  .cloud{position:absolute;background:rgba(255,255,255,.85);border-radius:20px;filter:blur(.3px)}
+  .ground{position:absolute;left:0;right:0;bottom:0;height:30%;
+    background:repeating-linear-gradient(90deg,#7a4a1e 0 38px,#6e421a 38px 40px);
+    border-top:6px solid var(--grass2)}
+  .screen{position:relative;z-index:2;height:100vh;display:none;align-items:center;justify-content:center;padding:20px}
+  .screen.active{display:flex}
+  .card{background:var(--panel);border:4px solid var(--wood);border-radius:18px;box-shadow:var(--shadow);padding:26px 28px}
+  #home .card{width:min(460px,94vw);text-align:center}
+  .logo{font-family:'Courier New',monospace;font-weight:800;letter-spacing:2px;line-height:.92}
+  .logo .l1{font-size:46px;color:var(--gold);text-shadow:3px 3px 0 var(--wood2),0 0 16px rgba(255,204,51,.4)}
+  .logo .l2{font-size:30px;color:var(--wood);margin-top:2px}
+  .tag{color:var(--wood2);font-size:13px;margin:8px 0 22px}
+  .tabs{display:flex;gap:6px;margin-bottom:16px;background:rgba(122,74,30,.12);padding:5px;border-radius:12px}
+  .tabs button{flex:1;border:none;background:transparent;padding:9px;border-radius:9px;cursor:pointer;font-weight:700;color:var(--wood2);font-size:14px}
+  .tabs button.on{background:var(--gold);color:var(--wood2);box-shadow:0 2px 0 var(--gold2)}
+  .field{display:block;width:100%;margin:8px 0;padding:11px 13px;border:2px solid var(--wood);border-radius:10px;font-size:15px;background:#fff;color:var(--ink)}
+  .btn{display:inline-block;cursor:pointer;border:none;border-radius:11px;padding:12px 22px;font-weight:800;font-size:15px;font-family:inherit;background:var(--gold);color:var(--wood2);box-shadow:0 4px 0 var(--gold2);transition:transform .08s}
+  .btn:active{transform:translateY(3px);box-shadow:0 1px 0 var(--gold2)}
+  .btn.full{width:100%;margin-top:6px}
+  .btn.ghost{background:transparent;border:2px solid var(--wood);color:var(--wood2);box-shadow:none}
+  .msg{min-height:18px;font-size:13px;color:#b00;margin-top:8px}
+  .who{font-size:13px;color:var(--wood2)}
+  #levels .card{width:min(880px,95vw);max-height:90vh;overflow:auto}
+  .hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;gap:10px;flex-wrap:wrap}
+  .hdr h2{font-family:'Courier New',monospace;color:var(--wood);font-size:22px}
+  .levelrow{display:flex;align-items:center;gap:16px;background:#fff;border:3px solid var(--wood);border-radius:14px;padding:14px 16px;cursor:pointer;transition:transform .1s,border-color .1s}
+  .levelrow:hover{transform:translateY(-3px);border-color:var(--gold2)}
+  .levelrow .thumb{width:96px;height:64px;border-radius:9px;flex:none;background:linear-gradient(180deg,#6db4e8 60%,var(--grass) 60%);position:relative;overflow:hidden;border:2px solid var(--wood2)}
+  .levelrow .thumb::after{content:"";position:absolute;left:10px;bottom:10px;width:26px;height:18px;background:var(--grass2);border-radius:50% 50% 0 0}
+  .levelrow .nm{font-weight:800;font-size:17px;color:var(--wood)}
+  .levelrow .sub{font-size:12px;color:var(--wood2)}
+  .lb{margin-top:18px}
+  .lb h3{font-family:'Courier New',monospace;color:var(--wood);font-size:15px;margin:14px 0 6px}
+  .lbctrl{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+  .lbctrl select{padding:7px 9px;border:2px solid var(--wood);border-radius:8px;background:#fff;font-family:inherit}
+  table{width:100%;border-collapse:collapse;font-size:13px;background:#fff;border-radius:10px;overflow:hidden}
+  th,td{padding:7px 10px;text-align:left;border-bottom:1px solid #eadcc0}
+  th{background:rgba(122,74,30,.12);color:var(--wood2);font-size:12px}
+  td.rk{font-weight:800;width:34px}
+  .medal{font-size:14px}
+  .empty{color:#999;font-size:13px;padding:8px 2px}
+  #chars .card{width:min(960px,95vw);max-height:92vh;overflow:auto}
+  .cgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  @media(max-width:680px){.cgrid{grid-template-columns:repeat(2,1fr)}}
+  .pcard{background:#fff;border:3px solid var(--wood);border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
+  .pcard .top{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:2px solid #eadcc0}
+  .pcard canvas{width:56px;height:74px;image-rendering:pixelated;flex:none}
+  .pcard .nm{font-family:'Courier New',monospace;font-weight:800;font-size:18px}
+  .ptabs{display:flex}
+  .ptabs button{flex:1;border:none;background:rgba(122,74,30,.10);cursor:pointer;padding:7px;font-weight:700;font-size:12px;color:var(--wood2)}
+  .ptabs button.on{background:#fff;color:var(--wood)}
+  .pbody{padding:10px 12px;font-size:13px;line-height:1.45;color:#3a2a18;min-height:96px}
+  .pcard .play{margin:0 12px 12px;padding:9px;border-radius:9px;border:none;cursor:pointer;font-weight:800;background:var(--gold);color:var(--wood2);box-shadow:0 3px 0 var(--gold2)}
+  .pcard .play:active{transform:translateY(2px);box-shadow:0 1px 0 var(--gold2)}
+  #play{flex-direction:column;gap:10px}
+  #play .bar{display:flex;gap:8px;align-items:center}
+  #play .bar button{cursor:pointer;border:2px solid var(--wood);background:var(--paper);border-radius:9px;padding:7px 12px;font-weight:700;font-family:'Courier New',monospace;font-size:12px;color:var(--wood2)}
+  #gamewrap{position:relative}
+  #c{display:block;background:var(--sky1);border:4px solid var(--wood);border-radius:10px;image-rendering:pixelated;box-shadow:var(--shadow)}
+  #end{display:none;position:absolute;inset:0;align-items:center;justify-content:center;flex-direction:column;gap:12px;background:rgba(36,26,16,.82);border-radius:10px}
+  #end h2{font-family:'Courier New',monospace;color:var(--gold);font-size:30px;letter-spacing:2px}
+  #end .coins{color:#fff;font-size:16px}
+  #end #end-time{color:var(--gold);font-family:'Courier New',monospace;font-size:22px;font-weight:800}
+  #end .rec{color:#9fe87a;font-size:14px;min-height:18px}
+  #end .row{display:flex;gap:10px}
+</style>
+</head>
+<body>
+  <div id="bg">
+    <div class="cloud" style="top:12%;left:8%;width:90px;height:26px"></div>
+    <div class="cloud" style="top:20%;left:60%;width:120px;height:30px"></div>
+    <div class="cloud" style="top:9%;left:78%;width:70px;height:22px"></div>
+    <div class="hill b" style="left:-4%;width:340px;height:200px"></div>
+    <div class="hill"   style="left:24%;width:420px;height:240px"></div>
+    <div class="hill b" style="left:62%;width:380px;height:210px"></div>
+    <div class="ground"></div>
+  </div>
+
+  <section id="home" class="screen active">
+    <div class="card">
+      <div class="logo"><div class="l1">COIN COIN</div><div class="l2">— BLÉ —</div></div>
+      <div class="tag mono">Jeu de plate-forme · speed run</div>
+      <div class="tabs">
+        <button id="tab-login" class="on" onclick="homeTab('login')">Se connecter</button>
+        <button id="tab-signup" onclick="homeTab('signup')">Créer un compte</button>
+      </div>
+      <input id="f-name" class="field" placeholder="Nom de joueur" autocomplete="off">
+      <input id="f-pass" class="field" type="password" placeholder="Mot de passe" autocomplete="off">
+      <button id="home-action" class="btn full" onclick="homeSubmit()">Se connecter</button>
+      <div id="home-msg" class="msg"></div>
+      <div id="home-mode" class="who mono"></div>
+    </div>
+  </section>
+
+  <section id="levels" class="screen">
+    <div class="card">
+      <div class="hdr">
+        <h2>Niveaux</h2>
+        <div class="who mono">Joueur : <b id="who-name"></b> · <a href="#" onclick="logout();return false" style="color:var(--wood2)">déconnexion</a></div>
+      </div>
+      <div class="levelrow" onclick="gotoChars(1)">
+        <div class="thumb"></div>
+        <div>
+          <div class="nm">La forêt aux caleçons</div>
+          <div class="sub">Niveau 1 · 19 zones · 3 pièces + 1 secrète</div>
+        </div>
+      </div>
+      <div class="lb">
+        <div class="lbctrl">
+          <h3 style="margin:0">Classements</h3>
+          <select id="lb-level" onchange="refreshLeaderboards()"><option value="1">La forêt aux caleçons</option></select>
+          <select id="lb-cid" onchange="refreshLeaderboards()">
+            <option value="best">Meilleur (tous persos)</option>
+          </select>
+        </div>
+        <div id="lb-table"></div>
+        <h3>Classement global (podiums par joueur)</h3>
+        <div id="lb-global"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="chars" class="screen">
+    <div class="card">
+      <div class="hdr">
+        <h2 id="chars-title">Choisis ton personnage</h2>
+        <button class="btn ghost" onclick="show('levels')">← Niveaux</button>
+      </div>
+      <div class="cgrid" id="cgrid"></div>
+    </div>
+  </section>
+
+  <section id="play" class="screen">
+    <div class="bar mono">
+      <button onclick="restartRun()">↺ Recommencer</button>
+      <button onclick="quitToChars()">≡ Personnages</button>
+      <span id="play-info" style="color:var(--wood2);font-weight:700"></span>
+    </div>
+    <div id="gamewrap">
+      <canvas id="c" width="896" height="512"></canvas>
+      <div id="end">
+        <h2>NIVEAU TERMINÉ</h2>
+        <div id="end-time">Temps : —</div>
+        <div class="coins" id="end-coins">Pièces : 0 / 3</div>
+        <div class="rec" id="end-rec"></div>
+        <div class="row">
+          <button class="btn" onclick="restartRun()">Rejouer</button>
+          <button class="btn ghost" onclick="quitToChars()">Personnages</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <script src="characters.js"></script>
+  <script src="monsters.js"></script>
+  <script src="level1.js"></script>
+  <script src="backend.js"></script>
+  <script>
+  let currentUser=null, currentLevel=1, engineLoaded=false;
+  const LEVELS={1:(window.LEVEL_NAME||"Niveau 1")};
+
+  function show(id){
+    document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+  }
+
+  let homeMode='login';
+  function homeTab(m){
+    homeMode=m;
+    document.getElementById('tab-login').classList.toggle('on',m==='login');
+    document.getElementById('tab-signup').classList.toggle('on',m==='signup');
+    document.getElementById('home-action').textContent=m==='login'?'Se connecter':'Créer le compte';
+    document.getElementById('home-msg').textContent='';
+  }
+  async function homeSubmit(){
+    const name=document.getElementById('f-name').value;
+    const pass=document.getElementById('f-pass').value;
+    const msg=document.getElementById('home-msg'); msg.style.color='#b00'; msg.textContent='';
+    if(!name.trim()){msg.textContent='Entre un nom.';return;}
+    if(!pass){msg.textContent='Entre un mot de passe.';return;}
+    try{
+      const u=homeMode==='signup'?await Backend.signup(name,pass):await Backend.login(name,pass);
+      currentUser=u.name; document.getElementById('who-name').textContent=currentUser;
+      await refreshLeaderboards(); show('levels');
+    }catch(e){ msg.textContent=e.message||'Erreur.'; }
+  }
+  function logout(){ currentUser=null; document.getElementById('f-pass').value=''; show('home'); }
+  document.getElementById('home-mode').textContent=Backend.useRemote?'Mode connecté · classement partagé':'Mode local · scores sur cet appareil (configure Supabase pour partager)';
+
+  function gotoChars(level){
+    currentLevel=level;
+    document.getElementById('chars-title').textContent='Choisis ton personnage — '+LEVELS[level];
+    buildCharCards(); show('chars');
+  }
+
+  (function fillCidSelect(){
+    const sel=document.getElementById('lb-cid');
+    Object.keys(CHARS).forEach(id=>{const o=document.createElement('option');o.value=id;o.textContent=CHARS[id].name;sel.appendChild(o);});
+  })();
+  function medal(i){return i===0?'🥇':i===1?'🥈':i===2?'🥉':'';}
+  async function refreshLeaderboards(){
+    const level=+document.getElementById('lb-level').value;
+    const cidVal=document.getElementById('lb-cid').value;
+    let rows;
+    if(cidVal==='best') rows=await Backend.leaderboardBest(level);
+    else rows=await Backend.leaderboard(level,+cidVal);
+    const host=document.getElementById('lb-table');
+    if(!rows.length){ host.innerHTML='<div class="empty">Aucun temps enregistré pour le moment.</div>'; }
+    else{
+      let h='<table><tr><th>#</th><th>Joueur</th>'+(cidVal==='best'?'<th>Perso</th>':'')+'<th>Temps</th></tr>';
+      rows.slice(0,10).forEach((r,i)=>{ h+='<tr><td class="rk"><span class="medal">'+medal(i)+'</span> '+(i+1)+'</td><td>'+esc(r.player)+'</td>'+(cidVal==='best'?'<td>'+(CHARS[r.cid]?CHARS[r.cid].name:'?')+'</td>':'')+'<td class="mono">'+fmt(r.time_ms)+'</td></tr>'; });
+      host.innerHTML=h+'</table>';
+    }
+    const g=await Backend.globalRanking(); const gh=document.getElementById('lb-global');
+    if(!g.length){ gh.innerHTML='<div class="empty">Pas encore de podiums.</div>'; }
+    else{
+      let h='<table><tr><th>#</th><th>Joueur</th><th>🥇</th><th>🥈</th><th>🥉</th></tr>';
+      g.slice(0,10).forEach((r,i)=>{ h+='<tr><td class="rk">'+(i+1)+'</td><td>'+esc(r.player)+'</td><td>'+r.t1+'</td><td>'+r.t2+'</td><td>'+r.t3+'</td></tr>'; });
+      gh.innerHTML=h+'</table>';
+    }
+  }
+  function fmt(ms){ return window.formatTime?window.formatTime(ms):(ms/1000).toFixed(2)+'s'; }
+  function esc(s){ return (s+'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+  function buildCharCards(){
+    const grid=document.getElementById('cgrid'); grid.innerHTML='';
+    Object.keys(CHARS).forEach(idStr=>{
+      const cid=+idStr,c=CHARS[cid];
+      const card=document.createElement('div'); card.className='pcard';
+      card.innerHTML='<div class="top"><canvas width="60" height="80"></canvas><div class="nm" style="color:'+c.color+'">'+c.name+'</div></div>'+
+        '<div class="ptabs"><button class="on" data-t="desc">Personnage</button><button data-t="pow">Pouvoirs</button></div>'+
+        '<div class="pbody"></div><button class="play">Jouer</button>';
+      const body=card.querySelector('.pbody');
+      const setTab=(w)=>{ body.textContent=w==='desc'?c.desc:c.descPower; card.querySelectorAll('.ptabs button').forEach(b=>b.classList.toggle('on',b.dataset.t===w)); };
+      setTab('desc');
+      card.querySelectorAll('.ptabs button').forEach(b=>b.onclick=()=>setTab(b.dataset.t));
+      card.querySelector('.play').onclick=()=>launchGame(cid);
+      grid.appendChild(card);
+      drawPreview(card.querySelector('canvas'),cid);
+    });
+  }
+  function drawPreview(cv,cid){
+    const prev=window.ctx; window.ctx=cv.getContext('2d');
+    window.ctx.imageSmoothingEnabled=false; window.ctx.clearRect(0,0,cv.width,cv.height);
+    window.ctx.save(); window.ctx.translate(cv.width/2,cv.height-8); window.ctx.scale(2.0,2.0);
+    try{ drawCharacterSprite(cid,false,false,[[0,0],[4,0]]); }catch(e){}
+    window.ctx.restore(); window.ctx=prev;
+  }
+
+  function launchGame(cid){
+    window.SELECTED_CID=cid; show('play');
+    document.getElementById('play-info').textContent=CHARS[cid].name+' · '+LEVELS[currentLevel];
+    document.getElementById('end').style.display='none';
+    if(!engineLoaded){
+      const s=document.createElement('script'); s.src='engine.js';
+      s.onload=()=>{ engineLoaded=true; window.startGame(); }; document.body.appendChild(s);
+    } else {
+      sessionStorage.setItem('ccb_resume',JSON.stringify({user:currentUser,level:currentLevel,cid}));
+      location.reload();
+    }
+  }
+  window.onLevelComplete=async function(timeMs,cid,coins,secret){
+    const rec=document.getElementById('end-rec'); rec.textContent='';
+    if(currentUser){
+      try{
+        const r=await Backend.submitScore(currentUser,currentLevel,cid,timeMs);
+        rec.textContent=r.improved?'★ Nouveau record personnel !':'Record actuel : '+fmt(r.best);
+        refreshLeaderboards();
+      }catch(e){ rec.textContent='Score non enregistré ('+(e.message||'erreur')+')'; }
+    }
+  };
+  function restartRun(){ if(window.restartLevel) window.restartLevel(); document.getElementById('end').style.display='none'; }
+  function quitToChars(){ sessionStorage.setItem('ccb_back',JSON.stringify({user:currentUser,level:currentLevel})); location.reload(); }
+
+  (function resume(){
+    const r=sessionStorage.getItem('ccb_resume'), b=sessionStorage.getItem('ccb_back');
+    if(r){
+      sessionStorage.removeItem('ccb_resume'); const o=JSON.parse(r);
+      currentUser=o.user; currentLevel=o.level; document.getElementById('who-name').textContent=currentUser;
+      window.SELECTED_CID=o.cid; show('play');
+      document.getElementById('play-info').textContent=CHARS[o.cid].name+' · '+LEVELS[o.level];
+      const s=document.createElement('script'); s.src='engine.js';
+      s.onload=()=>{ engineLoaded=true; window.startGame(); }; document.body.appendChild(s);
+    } else if(b){
+      sessionStorage.removeItem('ccb_back'); const o=JSON.parse(b);
+      currentUser=o.user; currentLevel=o.level; document.getElementById('who-name').textContent=currentUser;
+      refreshLeaderboards(); gotoChars(o.level);
+    }
+  })();
+  </script>
+</body>
+</html>
