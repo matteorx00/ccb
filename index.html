@@ -301,6 +301,15 @@
           </div>
           <span class="play-hint">▶ Jouer</span>
         </div>
+        <div class="levelrow" tabindex="0" role="button" style="margin-top:14px" onclick="gotoChars(2)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();gotoChars(2)}">
+          <div class="thumb" style="background:linear-gradient(180deg,#2a2740 55%,#4a4360 55%)"></div>
+          <div style="flex:1">
+            <div class="nm" id="levelrow-name-2">Les cavernes aux canards</div>
+            <div class="sub">Niveau 2 · 21 zones · 3 canards + 1 secret</div>
+            <div class="coinslots" id="coinslots-2"><img class="cs" src="duck.svg" alt=""><img class="cs" src="duck.svg" alt=""><img class="cs" src="duck.svg" alt=""></div>
+          </div>
+          <span class="play-hint">▶ Jouer</span>
+        </div>
 
         <div class="statband">
           <div class="stat"><div class="stat-n"><img class="duck-ico" src="duck.svg" alt=""><span id="stat-ducks">0</span></div><div class="stat-l">canards récoltés</div></div>
@@ -315,7 +324,7 @@
       <!-- ONGLET CLASSEMENTS -->
       <div id="pane-lb" class="pane" hidden>
         <div class="lbctrl">
-          <select id="lb-level" onchange="refreshLeaderboards()"><option value="1" id="lb-level-opt">La forêt des canards</option></select>
+          <select id="lb-level" onchange="refreshLeaderboards()"><option value="1" id="lb-level-opt">La forêt des canards</option><option value="2" id="lb-level-opt-2">Les cavernes aux canards</option></select>
           <select id="lb-cid" onchange="refreshLeaderboards()">
             <option value="best">Meilleur (tous persos)</option>
           </select>
@@ -372,16 +381,36 @@
   <script src="characters.js"></script>
   <script src="monsters.js"></script>
   <script src="level1.js"></script>
+  <script>
+  // Le moteur lit window.LEVEL / window.LEVEL_NAME au chargement. Comme chaque
+  // fichier de niveau écrase ces globales, on capture le niveau 1 ici, juste
+  // après son chargement, avant que level2.js ne réécrive window.LEVEL.
+  window.LEVELS_DATA = window.LEVELS_DATA || {};
+  window.LEVELS_DATA[1] = { name: window.LEVEL_NAME, data: window.LEVEL };
+  </script>
+  <script src="level2.js"></script>
+  <script>
+  window.LEVELS_DATA[2] = { name: window.LEVEL_NAME, data: window.LEVEL };
+  // Active le bon niveau pour le moteur. Par défaut le 1 ; reSelectLevel(n) le
+  // change avant chaque chargement de engine.js (cf. launchGame / resume).
+  window.selectLevelData = function(n){
+    const L = window.LEVELS_DATA[n] || window.LEVELS_DATA[1];
+    window.LEVEL = L.data; window.LEVEL_NAME = L.name;
+  };
+  window.selectLevelData(1);
+  </script>
   <script src="backend.js"></script>
   <script>
   let currentUser=null, currentLevel=1, engineLoaded=false;
-  const LEVELS={1:(window.LEVEL_NAME||"Niveau 1")};
-  // Le nom du niveau a une source unique (window.LEVEL_NAME dans level1.js) :
+  const LEVELS={ 1:(window.LEVELS_DATA[1].name||"Niveau 1"),
+                 2:(window.LEVELS_DATA[2].name||"Niveau 2") };
+  // Le nom du niveau a une source unique (window.LEVEL_NAME de chaque levelN.js) :
   // on le propage aux éléments statiques pour éviter toute divergence.
   (function syncLevelName(){
-    const nm=LEVELS[1];
-    const a=document.getElementById('levelrow-name'); if(a) a.textContent=nm;
-    const b=document.getElementById('lb-level-opt');  if(b) b.textContent=nm;
+    const a=document.getElementById('levelrow-name'); if(a) a.textContent=LEVELS[1];
+    const a2=document.getElementById('levelrow-name-2'); if(a2) a2.textContent=LEVELS[2];
+    const b=document.getElementById('lb-level-opt');  if(b) b.textContent=LEVELS[1];
+    const b2=document.getElementById('lb-level-opt-2'); if(b2) b2.textContent=LEVELS[2];
   })();
 
   function show(id){
@@ -604,6 +633,7 @@
 
   function launchGame(cid){
     window.SELECTED_CID=cid; show('play');
+    window.selectLevelData(currentLevel);   // active window.LEVEL du bon niveau
     document.getElementById('play-info').textContent=CHARS[cid].name+' · '+LEVELS[currentLevel];
     var _e=document.getElementById('end');_e.style.display='none';_e.classList.remove('show');
     if(!engineLoaded){
@@ -618,15 +648,20 @@
     const el=document.getElementById('duck-total-n'); if(el) el.textContent=(n||0);
     const s=document.getElementById('stat-ducks'); if(s) s.textContent=(n||0);
   }
-  function applyLevelCoins(got){
-    const wrap=document.getElementById('coinslots-1'); if(!wrap) return;
+  function applyLevelCoins(got, level){
+    const wrap=document.getElementById('coinslots-'+(level||currentLevel||1)); if(!wrap) return;
     const slots=wrap.querySelectorAll('.cs');
     slots.forEach((s,i)=> s.classList.toggle('got', i < (got||0)));
   }
   async function loadProgress(){
     if(!currentUser) return;
-    try{ const p=await Backend.getProgress(currentUser); updateDuckTotal(p.ducks); applyLevelCoins(p.coins_l1); }
-    catch(e){ updateDuckTotal(0); applyLevelCoins(0); }
+    try{
+      const p=await Backend.getProgress(currentUser);
+      updateDuckTotal(p.ducks);
+      applyLevelCoins(p.coins_l1||0, 1);
+      applyLevelCoins(p.coins_l2||0, 2);
+    }
+    catch(e){ updateDuckTotal(0); applyLevelCoins(0,1); applyLevelCoins(0,2); }
     renderJeuTab();
   }
   window.onLevelComplete=async function(timeMs,cid,coins,secret){
@@ -641,7 +676,8 @@
       try{
         const prog=await Backend.addProgress(currentUser,currentLevel,coins,gained);
         updateDuckTotal(prog.ducks);
-        applyLevelCoins(prog.coins_l1);
+        const cl = currentLevel===2 ? prog.coins_l2 : prog.coins_l1;
+        applyLevelCoins(cl||0, currentLevel);
       }catch(e){}
       refreshLeaderboards();
     }
@@ -655,6 +691,7 @@
       sessionStorage.removeItem('ccb_resume'); const o=JSON.parse(r);
       currentUser=o.user; currentLevel=o.level; document.getElementById('who-name').textContent=currentUser;
       window.SELECTED_CID=o.cid; show('play');
+      window.selectLevelData(currentLevel);   // active window.LEVEL du bon niveau
       document.getElementById('play-info').textContent=CHARS[o.cid].name+' · '+LEVELS[o.level];
       const s=document.createElement('script'); s.src='engine.js';
       s.onload=()=>{ engineLoaded=true; window.startGame(); }; document.body.appendChild(s);

@@ -49,6 +49,7 @@ const PLAYER_H = charDef.drawH, PLAYER_H_CR = charDef.drawHcr, PLAYER_W = 20;
 /* Trampoline : la hauteur monte avec le CARRE de la vitesse.
    Saut normal ~5.7 tuiles ; cible ~13 tuiles -> ratio vitesse = sqrt(13/5.7) ~1.5 */
 const TRAMPO_FORCE = PHYS.jumpForce * 1.6;   // ~-8.48 -> ~14.5 tuiles, marge confortable
+const STALACTITE_BOOST = -7.5;               // boost FIXE (indépendant du perso) ~ 9 tuiles : franchit la niche (~3-4 t) avec marge, pour tout le roster
 
 /* ── [NOYAU] Etat joueur ────────────────────────────────────────── */
 const p = { x:0, y:0, w:PLAYER_W, h:PLAYER_H, vx:0, vy:0,
@@ -215,14 +216,29 @@ function buildLevel(){
           movers.push(mv); break;
         }
         case 'bloc_tombant':
-          fallers.push({...r, baseY:r.y, state:'idle', timer:0, vy:0}); break;
-        case 'piece_recompense':
-          coins.push({...r, taken:false, cond:el.condition||'', id:el.id}); break;
+          fallers.push({...r, baseY:r.y, state:'idle', timer:0, vy:0,
+            lent: !!el.lent, delaiChute: (el.delai_chute!=null? el.delai_chute : null)}); break;
+        case 'piece_recompense': {
+          // _unlocked=false uniquement pour les canards à CONDITION LOGIQUE gérée
+          // (dragon aérien du N1, nettoyage de zone du N2). Les canards purement
+          // géométriques (trampoline/accroupi N1, niche/toit N2) se prennent au
+          // contact : _unlocked=true d'emblée.
+          const cond = el.condition||'';
+          const isClear = (el.clear_min!=null);
+          const isAerial = cond.indexOf('aerien')>=0;
+          const locked = isClear || isAerial;
+          coins.push({...r, taken:false, cond, id:el.id,
+            clearMin: (el.clear_min!=null? el.clear_min*16 : null),
+            clearMax: (el.clear_max!=null? el.clear_max*16 : null),
+            _unlocked: !locked}); break;
+        }
         case 'piece_secrete':
           secretCoin = {...r, taken:false, revealed:false, id:el.id}; break;
         case 'ennemi_1': spawnEnemy('walker', r, el); break;
         case 'ennemi_2': spawnEnemy('flyer',  r, el); break;
         case 'ennemi_3': spawnEnemy('caster', r, el); break;
+        case 'ennemi_4': spawnEnemy('dasher', r, el); break;
+        case 'ennemi_5': spawnEnemy('bomber', r, el); break;
         case 'mat_drapeau':
           flag = {...r, raised:false}; break;
         case 'chateau':
@@ -344,6 +360,26 @@ function spawnEnemy(type, r, el){
       alive:true, frame:0, tick:0, _dragonId:el.id, zMin, zMax,
       _aerial: !!el._dragon_aerien, _givesCoin: !!el._dragon_aerien });
   }
+  else if(type==='dasher'){
+    // Loup (signature N2). Cycle idle->telegraphing->dashing->recovering.
+    // La "vitesse" du JSON peut porter une fraction (ex "2.0x charge") : on
+    // l'applique en multiplicateur de la vitesse de charge de base sandbox (1.70).
+    const m = (''+(el.vitesse||'')).match(/([\d.]+)/);
+    const mult = m ? parseFloat(m[1]) : 1;
+    const base = 1.70;
+    enemies.push({ _type:'dasher', x:r.x, y:footY - 22, w:28, h:22,
+      vx:0, dashSpeed: base*mult, detectionRange:210, dashCooldown:90,
+      state:'idle', stateTimer:0,
+      facing: el.sens_initial==='droite'?1:-1,
+      alive:true, frame:0, tick:0, zMin, zMax });
+  }
+  else if(type==='bomber'){
+    // Slime (rare). Rebondit en continu sous gravité ; stompable.
+    enemies.push({ _type:'bomber', x:r.x, y:footY - 25, w:25, h:25,
+      vx:parseVm(el.vitesse) * (el.sens_initial==='droite'?1:-1) * 0.17,
+      vy:0, onGround:true, bounceForce:6.30,
+      alive:true, frame:0, tick:0, zMin, zMax });
+  }
 }
 
 /* ── [NIVEAU] Camera ────────────────────────────────────────────── */
@@ -415,11 +451,16 @@ function collideSolidsY(){
     }
   }
   // blocs tombants : appui dessus déclenche la chute
+  p.onSpringStalactite = false;
   for(const f of fallers){
     if(f.state==='gone') continue;
     if(p.vy>=0 && aabb(p.x,p.y,p.w,p.h,f.x,f.y,f.w,f.h) && (p.y+p.h - p.vy) <= f.y+2){
       p.y = f.y - p.h; p.vy=0; p.onGround=true;
-      if(f.state==='idle'){ f.state='shaking'; f.timer=30; }   // ~0.5s
+      // délai avant chute : court si "lent"/dédié (exigeant), sinon ~0.5s standard
+      if(f.state==='idle'){ f.state='shaking'; f.timer = (f.delaiChute!=null? f.delaiChute : 30); }
+      // stalactite-tremplin : tant qu'elle n'est pas tombée, un saut depuis elle
+      // reçoit un boost vertical fixe (déterministe, équitable pour tout le roster).
+      if(f.lent && (f.state==='idle' || f.state==='shaking')) p.onSpringStalactite = true;
     }
   }
   // plateformes mobiles : appui dessus (et on suit le mouvement)
@@ -476,8 +517,9 @@ function checkLevelInteractions(){
   // pièces-récompense
   for(const c of coins){
     if(c.taken) continue;
-    // la pièce du dragon n'est collectable qu'après sa mort
-    if(c.cond && c.cond.indexOf('aerien')>=0 && !c._unlocked) continue;
+    // canards conditionnels (dragon aérien N1, ou nettoyage de zone N2) :
+    // collectables seulement une fois débloqués.
+    if(!c._unlocked) continue;
     if(aabb(p.x,p.y,p.w,p.h,c.x,c.y,c.w,c.h)){ c.taken=true; coinCount++; }
   }
   // pièce secrète (hors décompte) : révélée si TOUS les ennemis sont tués
@@ -597,7 +639,11 @@ function updatePlayer(){
   // Coyote + buffer
   if(p.onGround){ p.coyote=8; djump.used=false; } else if(p.coyote>0) p.coyote--;
   if(jp) p.jumpBuf=10; if(p.jumpBuf>0) p.jumpBuf--;
-  if(p.jumpBuf>0 && p.coyote>0){ p.vy=PHYS.jumpForce; p.coyote=0; p.jumpBuf=0;
+  if(p.jumpBuf>0 && p.coyote>0){
+    // saut depuis une stalactite-tremplin : boost vertical fixe (équitable pour
+    // tout le roster). Sinon, saut normal du personnage.
+    p.vy = p.onSpringStalactite ? STALACTITE_BOOST : PHYS.jumpForce;
+    p.coyote=0; p.jumpBuf=0;
     if(p.crouching){p.crouching=false;p.h=PLAYER_H;} }
 
   // Gravité
@@ -647,8 +693,16 @@ function updatePowerTimers(){
 function killEnemy(e){
   if(!e.alive) return;
   e.alive=false; enemiesKilled++;
+  // ancien système : canard du dragon aérien (N1)
   if(e._type==='caster' && e._givesCoin){
     for(const c of coins){ if(c.cond && c.cond.indexOf('aerien')>=0 && !c._unlocked){ c._unlocked=true; break; } }
+  }
+  // canard "nettoyage de zone" : révélé quand plus aucun ennemi vivant dans l'intervalle
+  for(const c of coins){
+    if(c._unlocked || c.clearMin==null) continue;
+    const reste = enemies.some(en=>en.alive && en._type &&
+      (en.x+en.w/2) >= c.clearMin && (en.x+en.w/2) <= c.clearMax);
+    if(!reste) c._unlocked=true;
   }
 }
 
@@ -700,10 +754,50 @@ function updateMonsters(){
       }
       e.frame=Math.floor(Date.now()/400)%2;
     }
-  }
-
-  // Projectiles
-  for(const pr of monsterProjectiles){ pr.x+=pr.vx; pr.y+=pr.vy; pr.life--;
+    else if(e._type==='dasher'){
+      // Loup : idle -> telegraphing (flash) -> dashing (charge) -> recovering.
+      if(e.state==='idle'){
+        e.vx=0;
+        if(!p.dead){
+          const dx=(p.x+p.w/2)-(e.x+e.w/2);
+          e.facing = dx>0?1:-1;
+          if(Math.abs(dx) < e.detectionRange) { e.state='telegraphing'; e.stateTimer=40; }
+        }
+      } else if(e.state==='telegraphing'){
+        e.vx=0;
+        if(--e.stateTimer<=0){ e.state='dashing'; e.stateTimer=30; e.vx=e.facing*e.dashSpeed; }
+      } else if(e.state==='dashing'){
+        e.x+=e.vx;
+        // confinement strict à la zone : rebond aux bornes
+        if(e.x<=e.zMin){ e.x=e.zMin; e.vx*=-1; e.facing*=-1; }
+        if(e.x+e.w>=e.zMax){ e.x=e.zMax-e.w; e.vx*=-1; e.facing*=-1; }
+        if(--e.stateTimer<=0){ e.state='recovering'; e.stateTimer=e.dashCooldown; e.vx=0; }
+      } else if(e.state==='recovering'){
+        e.vx=0;
+        if(--e.stateTimer<=0) e.state='idle';
+      }
+    }
+    else if(e._type==='bomber'){
+      // Slime : gravité + rebond sur le sol/solides. Confiné à sa zone en X.
+      e.vy = Math.min(e.vy+0.18, 7);
+      e.y += e.vy;
+      e.x += e.vx;
+      // rebond sur le dessus d'un solide (en descente uniquement)
+      if(e.vy>0){
+        const prevBottom = e.y + e.h - e.vy;
+        for(const s of solids){
+          if(s.crouchGate) continue;
+          if(e.x+e.w>s.x && e.x<s.x+s.w && prevBottom<=s.y && e.y+e.h>=s.y){
+            e.y = s.y - e.h; e.vy = -e.bounceForce; break;
+          }
+        }
+      }
+      // garde-fou : ne pas tomber sous la surface du sol
+      if(e.y+e.h > GROUND_SURFACE){ e.y = GROUND_SURFACE - e.h; e.vy = -e.bounceForce; }
+      // confinement X : demi-tour aux bornes de zone
+      if(e.x<=e.zMin){ e.x=e.zMin; if(e.vx<0) e.vx*=-1; }
+      if(e.x+e.w>=e.zMax){ e.x=e.zMax-e.w; if(e.vx>0) e.vx*=-1; }
+    }
     if(++pr.tick>6){pr.frame=(pr.frame+1)%4;pr.tick=0;} }
   monsterProjectiles = monsterProjectiles.filter(pr=>pr.life>0 && pr.x>camX-40 && pr.x<camX+W+40);
 
@@ -721,6 +815,12 @@ function updateMonsters(){
     if(!aabb(p.x,p.y,p.w,p.h,e.x,e.y,e.w,e.h)) continue;
     // DASH (Oscar) ou GÉANT invincible (Victor) : tue l'ennemi au contact
     if(dash.active || giant.invincible>0){ killEnemy(e); continue; }
+    // LOUP EN CHARGE : intuable au stomp, contact toujours mortel pour le joueur
+    if(e._type==='dasher' && e.state==='dashing'){
+      if(charDef.hasArmor && armorHP>0){ armorHP--; armorFlash=90; e.alive=false; }
+      else { killPlayer(); return; }
+      continue;
+    }
     // STOMP : descente + pieds au-dessus de la mi-hauteur ennemi
     if(p.vy>0 && (p.y+p.h) < e.y + e.h*0.6){
       killEnemy(e); p.vy=PHYS.jumpForce*0.7;   // rebond
@@ -1174,6 +1274,8 @@ function drawMonsterLayer(){
     if(e._type==='walker') drawWalkerSprite(ex,ey,e.frame,e.vx<0?-1:1,e.w,e.h);
     if(e._type==='flyer')  drawFlyerSprite(ex,ey,e.frame,e.hspeed<0?-1:1,e.w,e.h);
     if(e._type==='caster') drawCasterSprite(ex,ey,e.frame,e.facing,e.w,e.h);
+    if(e._type==='dasher') drawDasherSprite(ex,ey,e.frame,e.facing,e.w,e.h,e.state);
+    if(e._type==='bomber') drawBomberSprite(ex,ey,e.frame,e.w,e.h);
   }
 }
 

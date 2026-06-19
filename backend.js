@@ -171,18 +171,18 @@ const Backend = (() => {
   const LS_PROG = "ccb_progress";   // { [player]: { ducks, coins_l1 } }
   function progGet(){ try { return JSON.parse(localStorage.getItem(LS_PROG)) || {}; } catch(e){ return {}; } }
   function progSet(o){ localStorage.setItem(LS_PROG, JSON.stringify(o)); }
-  function progLocalRead(player){ const o=progGet(); return o[player] || { ducks:0, coins_l1:0 }; }
+  function progLocalRead(player){ const o=progGet(); return o[player] || { ducks:0, coins_l1:0, coins_l2:0 }; }
   function progLocalWrite(player, data){ const o=progGet(); o[player]={...progLocalRead(player), ...data}; progSet(o); return o[player]; }
 
-  // Lit { ducks, coins_l1 } pour un joueur.
+  // Lit { ducks, coins_l1, coins_l2 } pour un joueur.
   async function getProgress(player){
     if(useRemote){
       try{
-        const rows = await sb("players?name=eq."+encodeURIComponent(player)+"&select=ducks,coins_l1");
+        const rows = await sb("players?name=eq."+encodeURIComponent(player)+"&select=ducks,coins_l1,coins_l2");
         if(rows && rows.length){
-          return { ducks: rows[0].ducks||0, coins_l1: rows[0].coins_l1||0 };
+          return { ducks: rows[0].ducks||0, coins_l1: rows[0].coins_l1||0, coins_l2: rows[0].coins_l2||0 };
         }
-        return { ducks:0, coins_l1:0 };
+        return { ducks:0, coins_l1:0, coins_l2:0 };
       }catch(e){ return progLocalRead(player); }   // colonnes absentes → repli local
     }
     return progLocalRead(player);
@@ -193,21 +193,30 @@ const Backend = (() => {
   async function addProgress(player, level, coinsThisRun, gained){
     if(useRemote){
       try{
-        const rows = await sb("players?name=eq."+encodeURIComponent(player)+"&select=ducks,coins_l1");
-        const cur = (rows && rows.length) ? rows[0] : { ducks:0, coins_l1:0 };
+        const rows = await sb("players?name=eq."+encodeURIComponent(player)+"&select=ducks,coins_l1,coins_l2");
+        const cur = (rows && rows.length) ? rows[0] : { ducks:0, coins_l1:0, coins_l2:0 };
         const newDucks = (cur.ducks||0) + gained;
         const patch = { ducks: newDucks };
         if(level===1) patch.coins_l1 = Math.max(cur.coins_l1||0, coinsThisRun);
+        if(level===2) patch.coins_l2 = Math.max(cur.coins_l2||0, coinsThisRun);
         await sb("players?name=eq."+encodeURIComponent(player), { method:"PATCH", body: JSON.stringify(patch) });
-        return { ducks:newDucks, coins_l1: patch.coins_l1 != null ? patch.coins_l1 : (cur.coins_l1||0) };
+        return { ducks:newDucks,
+                 coins_l1: patch.coins_l1 != null ? patch.coins_l1 : (cur.coins_l1||0),
+                 coins_l2: patch.coins_l2 != null ? patch.coins_l2 : (cur.coins_l2||0) };
       }catch(e){
         // migration non faite ou écriture refusée : on n'interrompt pas le jeu
         const cur = progLocalRead(player);
-        return progLocalWrite(player, { ducks: cur.ducks+gained, coins_l1: Math.max(cur.coins_l1, coinsThisRun) });
+        const data = { ducks: cur.ducks+gained };
+        if(level===1) data.coins_l1 = Math.max(cur.coins_l1, coinsThisRun);
+        if(level===2) data.coins_l2 = Math.max(cur.coins_l2||0, coinsThisRun);
+        return progLocalWrite(player, data);
       }
     }
     const cur = progLocalRead(player);
-    return progLocalWrite(player, { ducks: cur.ducks+gained, coins_l1: Math.max(cur.coins_l1, coinsThisRun) });
+    const data = { ducks: cur.ducks+gained };
+    if(level===1) data.coins_l1 = Math.max(cur.coins_l1, coinsThisRun);
+    if(level===2) data.coins_l2 = Math.max(cur.coins_l2||0, coinsThisRun);
+    return progLocalWrite(player, data);
   }
 
   // Mes temps sur un niveau, indexés par cid : { cid: time_ms }
