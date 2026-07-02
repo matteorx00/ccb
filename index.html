@@ -1,0 +1,660 @@
+<script src="audio.js"></script>
+  <script src="characters.js"></script>
+  <script src="monsters.js"></script>
+  <script src="level1.js"></script>
+  <script>
+  // Le moteur lit window.LEVEL / window.LEVEL_NAME au chargement. Comme chaque
+  // fichier de niveau écrase ces globales, on capture le niveau 1 ici, juste
+  // après son chargement, avant que level2.js ne réécrive window.LEVEL.
+  window.LEVELS_DATA = window.LEVELS_DATA || {};
+  window.LEVELS_DATA[1] = { name: window.LEVEL_NAME, data: window.LEVEL };
+  </script>
+  <script src="level2.js"></script>
+  <script>
+  window.LEVELS_DATA[2] = { name: window.LEVEL_NAME, data: window.LEVEL };
+  </script>
+  <script src="level3.js"></script>
+  <script>
+  window.LEVELS_DATA[3] = { name: window.LEVEL_NAME, data: window.LEVEL };
+  // Active le bon niveau pour le moteur. Par défaut le 1 ; reSelectLevel(n) le
+  // change avant chaque chargement de engine.js (cf. launchGame / resume).
+  window.selectLevelData = function(n){
+    const L = window.LEVELS_DATA[n] || window.LEVELS_DATA[1];
+    window.LEVEL = L.data; window.LEVEL_NAME = L.name;
+  };
+  window.selectLevelData(1);
+  </script>
+  <script src="backend.js"></script>
+  <script>
+  let currentUser=null, currentLevel=1, engineLoaded=false;
+  // PWA : enregistrement du service worker (installation + hors-ligne).
+  if('serviceWorker' in navigator){
+    window.addEventListener('load',()=>{ navigator.serviceWorker.register('sw.js').catch(()=>{}); });
+  }
+  // Verrouillage en PAYSAGE quand c'est possible (Android/Chrome le supporte ;
+  // iOS ne le permet pas, d'où l'invite "tourne ton téléphone" en repli visuel).
+  function lockLandscape(){
+    try{
+      if(screen.orientation && screen.orientation.lock){ screen.orientation.lock('landscape').catch(()=>{}); }
+    }catch(e){}
+  }
+  window.addEventListener('load', lockLandscape);
+  document.addEventListener('fullscreenchange', lockLandscape);
+  // AUDIO : débloquer l'AudioContext au tout premier geste (exigence des navigateurs).
+  function _firstGestureUnlock(){ if(window.Audio2) Audio2.unlock(); }
+  window.addEventListener('pointerdown', _firstGestureUnlock, {once:true});
+  window.addEventListener('keydown', _firstGestureUnlock, {once:true});
+  // Son de clic sur les boutons de menu (hors contrôles tactiles de jeu).
+  document.addEventListener('click', (e)=>{
+    const b=e.target.closest('button');
+    if(!b) return;
+    if(b.closest('#touch-controls')) return;          // pas les boutons de jeu
+    if(b.id==='snd-toggle') return;                   // le toggle gère son propre son
+    if(window.Audio2 && Audio2.isEnabled()) Audio2.sfx('click');
+  }, true);
+  // Réglage du son (bouton on/off + volume), persisté par Audio2.
+  (function bindSoundCtl(){
+    const tog=document.getElementById('snd-toggle'), vol=document.getElementById('snd-vol');
+    if(!tog||!vol||!window.Audio2) return;
+    function refresh(){
+      const on=Audio2.isEnabled();
+      tog.textContent = on ? '🔊' : '🔇';
+      tog.classList.toggle('off', !on);
+      vol.value = Math.round(Audio2.volume()*100);
+      vol.disabled = !on;
+    }
+    tog.addEventListener('click', ()=>{ Audio2.unlock(); Audio2.setEnabled(!Audio2.isEnabled());
+      if(Audio2.isEnabled()) Audio2.sfx('click'); refresh(); });
+    vol.addEventListener('input', ()=>{ Audio2.unlock(); Audio2.setVolume((+vol.value)/100); });
+    vol.addEventListener('change', ()=>{ if(Audio2.isEnabled()) Audio2.sfx('click'); });
+    refresh();
+  })();
+  const LEVELS={ 1:(window.LEVELS_DATA[1].name||"Niveau 1"),
+                 2:(window.LEVELS_DATA[2].name||"Niveau 2"),
+                 3:(window.LEVELS_DATA[3].name||"Niveau 3") };
+  // Le nom du niveau a une source unique (window.LEVEL_NAME de chaque levelN.js) :
+  // on le propage aux éléments statiques pour éviter toute divergence.
+  (function syncLevelName(){
+    const a=document.getElementById('levelrow-name'); if(a) a.textContent=LEVELS[1];
+    const a2=document.getElementById('levelrow-name-2'); if(a2) a2.textContent=LEVELS[2];
+    const a3=document.getElementById('levelrow-name-3'); if(a3) a3.textContent=LEVELS[3];
+    const b=document.getElementById('lb-level-opt');  if(b) b.textContent=LEVELS[1];
+    const b2=document.getElementById('lb-level-opt-2'); if(b2) b2.textContent=LEVELS[2];
+    const b3=document.getElementById('lb-level-opt-3'); if(b3) b3.textContent=LEVELS[3];
+  })();
+
+  function show(id){
+    document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+    if(id==='levels' && typeof homeScreenTab==='function') homeScreenTab('jeu');
+    // Musique de menu sur les écrans hors-jeu (accueil, sélection). En jeu, c'est
+    // la musique du niveau qui prend le relais (lancée par launchGame).
+    if(window.Audio2){
+      if(id==='levels' || id==='chars') Audio2.playMusic(0);   // 0 = piste menu
+      // (en 'play', launchGame lance la musique du niveau ; showEnd la coupe)
+    }
+  }
+
+  let homeMode='login';
+  function openForm(m){
+    document.getElementById('home-entry').classList.add('hide');
+    document.getElementById('home-form').classList.add('show');
+    homeTab(m);
+    document.getElementById('f-name').focus();
+  }
+  function closeForm(){
+    document.getElementById('home-form').classList.remove('show');
+    document.getElementById('home-entry').classList.remove('hide');
+    document.getElementById('home-msg').textContent='';
+  }
+  function homeTab(m){
+    homeMode=m;
+    document.getElementById('tab-login').classList.toggle('on',m==='login');
+    document.getElementById('tab-signup').classList.toggle('on',m==='signup');
+    document.getElementById('home-action').textContent=m==='login'?'Se connecter':'Créer le compte';
+    document.getElementById('home-msg').textContent='';
+  }
+  async function homeSubmit(){
+    const name=document.getElementById('f-name').value;
+    const pass=document.getElementById('f-pass').value;
+    const msg=document.getElementById('home-msg'); msg.style.color='#b00'; msg.textContent='';
+    if(!name.trim()){msg.textContent='Entre un nom.';return;}
+    if(!pass){msg.textContent='Entre un mot de passe.';return;}
+    try{
+      const u=homeMode==='signup'?await Backend.signup(name,pass):await Backend.login(name,pass);
+      currentUser=u.name; document.getElementById('who-name').textContent=currentUser;
+      await loadProgress();
+      await refreshLeaderboards(); show('levels');
+    }catch(e){ msg.textContent=e.message||'Erreur.'; }
+  }
+  
+  // ▼▼▼ MODIFICATION 1 : Déconnexion complète avec Backend.logout() ▼▼▼
+  function logout(){ 
+    if (Backend && Backend.logout) Backend.logout();
+    currentUser=null; 
+    document.getElementById('f-pass').value=''; 
+    closeForm(); 
+    show('home'); 
+  }
+  // ▲▲▲ FIN MODIFICATION 1 ▲▲▲
+
+  document.getElementById('home-mode').textContent=Backend.useRemote?'Mode connecté · classement partagé':'Mode local · scores sur cet appareil (configure Supabase pour partager)';
+
+  function gotoChars(level){
+    if(!levelUnlocked(level)){
+      // niveau verrouillé : on informe et on reste sur l'accueil
+      const prev = level-1;
+      alert('Termine d\'abord le niveau '+prev+' pour d\u00e9bloquer le niveau '+level+'.');
+      return;
+    }
+    currentLevel=level;
+    document.getElementById('chars-title').textContent='Choisis ton personnage — '+LEVELS[level];
+    buildCharCards(); show('chars');
+    // animations de déblocage en attente (revenu d'une fin de niveau)
+    try{
+      const pend=JSON.parse(sessionStorage.getItem('ccb_unlock_anim')||'[]');
+      if(pend && pend.length){ sessionStorage.removeItem('ccb_unlock_anim'); _pendingUnlocks=pend; setTimeout(flushPendingUnlocks,400); }
+    }catch(e){}
+  }
+
+  (function fillCidSelect(){
+    const sel=document.getElementById('lb-cid');
+    Object.keys(CHARS).filter(id=>!CHARS[id].isBoss).forEach(id=>{const o=document.createElement('option');o.value=id;o.textContent=CHARS[id].name;sel.appendChild(o);});
+  })();
+  function medal(i){return i===0?'🥇':i===1?'🥈':i===2?'🥉':'';}
+
+  // Bascule entre les onglets Jeu et Classements de l'écran d'accueil
+  function homeScreenTab(which){
+    const jeu=which==='jeu';
+    document.getElementById('ht-jeu').classList.toggle('on',jeu);
+    document.getElementById('ht-lb').classList.toggle('on',!jeu);
+    const pj=document.getElementById('pane-jeu'), pl=document.getElementById('pane-lb');
+    pj.hidden=!jeu; pl.hidden=jeu;
+    // relance l'animation d'entrée du panneau affiché
+    const shown = jeu?pj:pl; shown.style.animation='none'; void shown.offsetWidth; shown.style.animation='';
+    if(!jeu) refreshLeaderboards();
+  }
+
+  // ── Onglet JEU : stats perso + records par personnage ──
+  async function renderJeuTab(){
+    if(!currentUser) return;
+    let mine={};
+    try{ mine=await Backend.myScores(currentUser,currentLevel); }catch(e){ mine={}; }
+    // stats
+    const done=Object.keys(mine).length;
+    const best=Object.values(mine).length?Math.min(...Object.values(mine)):null;
+    document.getElementById('stat-done').textContent=done;
+    document.getElementById('stat-best').textContent=best!=null?fmt(best):'—';
+    // grille des persos
+    const grid=document.getElementById('perso-records'); grid.innerHTML='';
+    Object.keys(CHARS).filter(idStr=>!CHARS[idStr].isBoss).map(Number)
+      .sort((a,b)=>(CHARS[a].order||0)-(CHARS[b].order||0)).forEach(cid=>{
+      const c=CHARS[cid], t=mine[cid];
+      const owned=charOwned(cid);
+      const cell=document.createElement('div');
+      cell.className='pcell'+(owned?'':' locked'); cell.tabIndex=0; cell.setAttribute('role','button');
+      cell.innerHTML='<canvas width="50" height="64"></canvas>'+
+        '<div><div class="pc-nm" style="color:'+c.color+'">'+esc(c.name)+(owned?'':' \ud83d\udd12')+'</div>'+
+        (owned?(t!=null?'<div class="pc-t">⏱ '+fmt(t)+'</div>':'<div class="pc-t none">jamais terminé</div>')
+              :'<div class="pc-t none">verrouill\u00e9</div>')+'</div>';
+      const go=()=>{ charIndex=CHAR_IDS.indexOf(cid); gotoChars(currentLevel); setTimeout(()=>{charIndex=CHAR_IDS.indexOf(cid);renderCarousel&&renderCarousel();},0); };
+      cell.onclick=go;
+      cell.onkeydown=e=>{ if(e.key==='Enter'||e.key===' '){e.preventDefault();go();} };
+      grid.appendChild(cell);
+      drawSpriteOn(cell.querySelector('canvas'),cid,0.8,8);
+    });
+  }
+
+  async function refreshLeaderboards(){
+    const level=+document.getElementById('lb-level').value;
+    const cidVal=document.getElementById('lb-cid').value;
+    let rows;
+    if(cidVal==='best') rows=await Backend.leaderboardBest(level);
+    else rows=await Backend.leaderboard(level,+cidVal);
+
+    // PODIUM (top 3) — ordre d'affichage 2·1·3
+    const pod=document.getElementById('lb-podium');
+    if(rows.length){
+      const order=[{r:rows[1],p:2},{r:rows[0],p:1},{r:rows[2],p:3}];
+      pod.innerHTML=order.filter(o=>o.r).map(o=>
+        '<div class="pod p'+o.p+'">'+
+          '<div class="who2">'+esc(o.r.player)+'</div>'+
+          '<div class="tm">'+fmt(o.r.time_ms)+'</div>'+
+          '<div class="step"><span class="medal-ico">'+medal(o.p-1)+'</span></div>'+
+        '</div>').join('');
+    } else pod.innerHTML='';
+
+    // LISTE complète, ma ligne surlignée
+    const host=document.getElementById('lb-table');
+    if(!rows.length){ host.innerHTML='<div class="empty">Personne n\'a encore terminé ce niveau. Lance-toi le premier !</div>'; }
+    else{
+      let h='<table><thead><tr><th>#</th><th>Joueur</th>'+(cidVal==='best'?'<th>Perso</th>':'')+'<th>Temps</th></tr></thead><tbody>';
+      rows.slice(0,10).forEach((r,i)=>{
+        const me=r.player===currentUser?' class="me"':'';
+        h+='<tr'+me+'><td class="rk">'+(i+1)+'</td><td>'+esc(r.player)+'</td>'+(cidVal==='best'?'<td>'+(CHARS[r.cid]?CHARS[r.cid].name:'?')+'</td>':'')+'<td class="mono">'+fmt(r.time_ms)+'</td></tr>';
+      });
+      host.innerHTML=h+'</tbody></table>';
+    }
+
+    const g=await Backend.globalRanking(); const gh=document.getElementById('lb-global');
+    if(!g.length){ gh.innerHTML='<div class="empty">Pas encore de podiums.</div>'; }
+    else{
+      let h='<table><thead><tr><th>#</th><th>Joueur</th><th>🥇</th><th>🥈</th><th>🥉</th></tr></thead><tbody>';
+      g.slice(0,10).forEach((r,i)=>{
+        const me=r.player===currentUser?' class="me"':'';
+        h+='<tr'+me+'><td class="rk">'+(i+1)+'</td><td>'+esc(r.player)+'</td><td>'+r.t1+'</td><td>'+r.t2+'</td><td>'+r.t3+'</td></tr>';
+      });
+      gh.innerHTML=h+'</tbody></table>';
+    }
+  }
+  function fmt(ms){ return window.formatTime?window.formatTime(ms):(ms/1000).toFixed(2)+'s'; }
+  function esc(s){ return (s+'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+  // Stubs des globales lues par les sprites (le moteur n'est pas encore chargé).
+  // Top-level const de engine.js ne sont pas des propriétés de window : pas de collision.
+  if(typeof window.dash==='undefined')  window.dash={active:false,cooldown:0};
+  if(typeof window.djump==='undefined') window.djump={used:false};
+  if(typeof window.ballCd==='undefined')window.ballCd=0;
+  if(typeof window.giant==='undefined') window.giant={active:false,charges:0};
+
+  const POWER_TAG={1:'Aucun',2:'Dash',3:'Double saut',4:'Boule de feu',5:'Géant',6:'Armure'};
+  const CHAR_IDS=Object.keys(CHARS).map(Number).filter(id=>!CHARS[id].isBoss)
+                   .sort((a,b)=>(CHARS[a].order||0)-(CHARS[b].order||0));  // ordre de progression
+  let charIndex=0;          // position dans CHAR_IDS
+  let charTab='desc';       // onglet courant, conservé d'une fiche à l'autre
+
+  function drawSpriteOn(cv,cid,scale,baseFromBottom){
+    const prev=window.ctx; window.ctx=cv.getContext('2d');
+    window.ctx.imageSmoothingEnabled=false; window.ctx.clearRect(0,0,cv.width,cv.height);
+    window.ctx.save();
+    window.ctx.translate(cv.width/2, cv.height-baseFromBottom);
+    window.ctx.scale(scale,scale);
+    try{ drawCharacterSprite(cid,false,false,[[0,0],[4,0]]); }catch(e){}
+    window.ctx.restore(); window.ctx=prev;
+  }
+
+  function renderCarousel(){
+    const n=CHAR_IDS.length;
+    const cid=CHAR_IDS[charIndex];
+    const c=CHARS[cid];
+    const prevId=CHAR_IDS[(charIndex-1+n)%n];
+    const nextId=CHAR_IDS[(charIndex+1)%n];
+    const st=charStatus(cid);
+    const owned = st.state==='owned';
+
+    // Fiche centrale
+    const card=document.getElementById('pcard');
+    card.style.setProperty('--c',c.color);
+    card.classList.remove('swap'); void card.offsetWidth; card.classList.add('swap');
+    card.classList.toggle('locked-card', !owned);
+
+    // bloc condition / achat (si non possédé)
+    let lockHtml='';
+    if(!owned){
+      const bal=duckBalance();
+      let action='';
+      if(st.buy){
+        const can = bal>=st.cost;
+        const ico = '<img src="duck.svg" alt="canards" class="buy-duck">';
+        action = '<button class="buybtn '+(can?'can':'cant')+'" '+(can?'':'disabled')+'>'
+               + (can?('D\u00e9penser '+st.cost+' '+ico):('Il te faut '+st.cost+' '+ico+' ('+bal+')'))+'</button>';
+      } else if(st.auto){
+        action = '<div class="autohint">Se d\u00e9bloque automatiquement</div>';
+      }
+      lockHtml = '<div class="lockinfo"><div class="condlbl">\ud83d\udd12 '+(st.cond||'Verrouill\u00e9')+'</div>'+action+'</div>';
+    }
+
+    card.innerHTML=
+      '<div class="hero'+(owned?'':' locked')+'">'+
+        '<canvas width="150" height="180"></canvas>'+(owned?'':'<div class="lockicon">\ud83d\udd12</div>')+'</div>'+
+      '<div class="nm" style="color:'+c.color+'">'+c.name+'</div>'+
+      '<div class="ptabs">'+
+        '<button data-t="desc">Personnage</button>'+
+        '<button data-t="pow"'+(owned?'':' class="pow-locked"')+'>Pouvoirs'+(owned?'':' \ud83d\udd12')+'</button>'+
+      '</div>'+
+      '<div class="pbody"></div>'+
+      lockHtml+
+      '<button class="play"'+(owned?'':' disabled')+'>'+(owned?'Jouer':'Verrouill\u00e9')+'</button>';
+    drawSpriteOn(card.querySelector('canvas'),cid,2.4,14);
+
+    const body=card.querySelector('.pbody');
+    const applyTab=()=>{
+      // le descriptif du PERSONNAGE est toujours visible ; celui des POUVOIRS est masqué si verrouillé
+      if(charTab==='pow' && !owned){
+        body.innerHTML='<span class="powhidden">\ud83d\udd12 D\u00e9bloque '+c.name+' pour d\u00e9couvrir ses pouvoirs.</span>';
+      } else {
+        body.textContent = charTab==='desc' ? c.desc : c.descPower;
+      }
+      card.querySelectorAll('.ptabs button').forEach(b=>b.classList.toggle('on',b.dataset.t===charTab));
+    };
+    applyTab();
+    card.querySelectorAll('.ptabs button').forEach(b=>b.onclick=()=>{charTab=b.dataset.t;applyTab();});
+
+    const playBtn=card.querySelector('.play');
+    if(owned) playBtn.onclick=()=>launchGame(cid);
+
+    // bouton d'achat
+    const buy=card.querySelector('.buybtn.can');
+    if(buy) buy.onclick=()=>attemptBuy(cid);
+
+    // Aperçus voisins
+    const fillPeek=(el,pid)=>{
+      const o=charOwned(pid);
+      el.innerHTML='<canvas width="80" height="96"></canvas>'+(o?'':'<div class="peek-lock">\ud83d\udd12</div>')+'<div class="pn" style="color:'+CHARS[pid].color+'">'+CHARS[pid].name+'</div>';
+      el.classList.toggle('locked', !o);
+      drawSpriteOn(el.querySelector('canvas'),pid,1.2,8);
+      el.onclick=()=>{ charIndex=CHAR_IDS.indexOf(pid); renderCarousel(); };
+    };
+    fillPeek(document.getElementById('peek-prev'),prevId);
+    fillPeek(document.getElementById('peek-next'),nextId);
+
+    // Pastilles
+    const dots=document.getElementById('char-dots'); dots.innerHTML='';
+    CHAR_IDS.forEach((id,i)=>{
+      const d=document.createElement('button');
+      d.className=(i===charIndex?'on':'')+(charOwned(id)?'':' locked');
+      d.title=CHARS[id].name;
+      d.onclick=()=>{ charIndex=i; renderCarousel(); };
+      dots.appendChild(d);
+    });
+  }
+
+  // Tentative d'achat d'un perso payant.
+  async function attemptBuy(cid){
+    const u=CHARS[cid].unlock; if(!u||u.type!=='buy') return;
+    if(duckBalance() < u.cost) return;
+    let res;
+    try{ res=await Backend.buyCharacter(currentUser, cid, u.cost); }
+    catch(e){ res={ok:false}; }
+    if(res && res.ok){
+      if(!PLAYER.unlocked.includes(cid)) PLAYER.unlocked.push(cid);
+      PLAYER.spent = res.spent!=null ? res.spent : (PLAYER.spent+u.cost);
+      updateDuckTotal();          // recalcule le solde affiché
+      playUnlockAnimation(cid);   // animation de déblocage
+      renderCarousel();
+      renderJeuTab();
+    }
+  }
+
+  // Animation de déblocage : perso au centre, halo jaune, 5 s, fermable par n'importe quelle touche.
+  let _unlockTimer=null, _unlockCloser=null;
+  function playUnlockAnimation(cid){
+    closeUnlockAnimation();
+    if(window.Audio2) Audio2.sfx('unlock');
+    const c=CHARS[cid];
+    const ov=document.createElement('div'); ov.id='unlock-ov'; ov.className='unlock-ov';
+    ov.innerHTML=
+      '<div class="unlock-burst"></div>'+
+      '<div class="unlock-card" style="--c:'+c.color+'">'+
+        '<div class="unlock-title">Personnage d\u00e9bloqu\u00e9 !</div>'+
+        '<div class="unlock-hero"><canvas width="200" height="240"></canvas></div>'+
+        '<div class="unlock-name" style="color:'+c.color+'">'+c.name+'</div>'+
+        '<div class="unlock-hint">Appuie sur une touche pour continuer</div>'+
+      '</div>';
+    document.body.appendChild(ov);
+    try{ drawSpriteOn(ov.querySelector('canvas'),cid,3.2,18); }catch(e){}
+    requestAnimationFrame(()=>ov.classList.add('show'));
+    _unlockCloser=()=>closeUnlockAnimation();
+    setTimeout(()=>{ document.addEventListener('keydown',_unlockCloser,{once:true}); ov.addEventListener('click',_unlockCloser,{once:true}); }, 150);
+    _unlockTimer=setTimeout(closeUnlockAnimation, 5000);
+  }
+  function closeUnlockAnimation(){
+    if(_unlockTimer){ clearTimeout(_unlockTimer); _unlockTimer=null; }
+    if(_unlockCloser){ document.removeEventListener('keydown',_unlockCloser); _unlockCloser=null; }
+    const ov=document.getElementById('unlock-ov');
+    if(ov){ ov.classList.remove('show'); setTimeout(()=>ov.remove(),300); }
+  }
+
+  document.getElementById('nav-prev').onclick=()=>{ charIndex=(charIndex-1+CHAR_IDS.length)%CHAR_IDS.length; renderCarousel(); };
+  document.getElementById('nav-next').onclick=()=>{ charIndex=(charIndex+1)%CHAR_IDS.length; renderCarousel(); };
+  document.addEventListener('keydown',e=>{
+    if(!document.getElementById('chars').classList.contains('active')) return;
+    if(e.key==='ArrowLeft'){ document.getElementById('nav-prev').click(); }
+    else if(e.key==='ArrowRight'){ document.getElementById('nav-next').click(); }
+  });
+
+  function buildCharCards(){ charIndex=0; charTab='desc'; renderCarousel(); }
+
+  function launchGame(cid){
+    if(!charOwned(cid)) return;   // sécurité : perso verrouillé, on ne lance pas
+    window.SELECTED_CID=cid; show('play');
+    window.selectLevelData(currentLevel);   // active window.LEVEL du bon niveau
+    document.getElementById('play-info').textContent=CHARS[cid].name+' · '+LEVELS[currentLevel];
+    var _e=document.getElementById('end');_e.style.display='none';_e.classList.remove('show');
+    setupTouchForChar(cid);   // adapte le bouton pouvoir au perso
+    if(!engineLoaded){
+      const s=document.createElement('script'); s.src='engine.js';
+      s.onload=()=>{ engineLoaded=true; window.startGame(); bindTouchControls(); if(window.Audio2)Audio2.playMusic(currentLevel); }; document.body.appendChild(s);
+    } else {
+      sessionStorage.setItem('ccb_resume',JSON.stringify({user:currentUser,level:currentLevel,cid}));
+      location.reload();
+    }
+  }
+
+  // ── CONTRÔLES TACTILES (mobile) ──────────────────────────────────
+  // Détection : appareil tactile OU petit écran. N'altère jamais le clavier sur ordi.
+  const IS_TOUCH = (('ontouchstart' in window) || (navigator.maxTouchPoints>0)) ;
+  if(IS_TOUCH) document.body.classList.add('touch');
+
+  // Le bouton "pouvoir" n'a de sens que si le perso a un pouvoir, OU pour Louise (niveau 3,
+  // où le bouton sert à lancer les caleçons ramassés). Sinon on le masque.
+  function setupTouchForChar(cid){
+    const pw=document.getElementById('tc-power'); if(!pw) return;
+    const c=CHARS[cid]||{};
+    const hasPower = c.hasDash||c.hasDoubleJump||c.hasFireball||c.hasGiant;
+    const isBossLevel = (currentLevel===3);   // Louise : lancer de caleçons via le bouton pouvoir
+    const show = hasPower || isBossLevel;
+    pw.style.display = show ? 'flex' : 'none';
+    // libellé indicatif
+    pw.textContent = isBossLevel ? '🩲' : '★';
+  }
+
+  let _touchBound=false;
+  function bindTouchControls(){
+    if(_touchBound || !IS_TOUCH) return; _touchBound=true;
+    const I=()=>window.CCB_input; // peut ne pas exister avant chargement moteur
+    // ----- Joystick -----
+    const stick=document.getElementById('tc-stick'), knob=document.getElementById('tc-stick-knob');
+    let stickId=null, cx=0, cy=0, R=44;
+    function stickStart(e){
+      const t=e.changedTouches?e.changedTouches[0]:e; stickId=t.identifier!=null?t.identifier:'mouse';
+      const r=stick.getBoundingClientRect(); cx=r.left+r.width/2; cy=r.top+r.height/2;
+      stickMove(e); e.preventDefault();
+    }
+    function stickMove(e){
+      const list=e.changedTouches?Array.from(e.changedTouches):[e];
+      const t=list.find(t=>(t.identifier!=null?t.identifier:'mouse')===stickId); if(!t) return;
+      let dx=t.clientX-cx, dy=t.clientY-cy;
+      const d=Math.hypot(dx,dy)||1, cl=Math.min(d,R);
+      const nx=dx/d*cl, ny=dy/d*cl;
+      knob.style.transform='translate('+(-50)+'%,'+(-50)+'%) translate('+nx+'px,'+ny+'px)';
+      const dead=12, deadY=20;   // seuil vertical un peu plus grand (accroupir volontairement)
+      if(I()) I().dir(dx>dead?1:dx<-dead?-1:0, dy>deadY?1:0);
+      e.preventDefault();
+    }
+    function stickEnd(e){
+      const list=e.changedTouches?Array.from(e.changedTouches):[e];
+      if(!list.some(t=>(t.identifier!=null?t.identifier:'mouse')===stickId)) return;
+      stickId=null; knob.style.transform='translate(-50%,-50%)';
+      if(I()) I().dir(0,0); e.preventDefault();
+    }
+    stick.addEventListener('touchstart',stickStart,{passive:false});
+    stick.addEventListener('touchmove',stickMove,{passive:false});
+    stick.addEventListener('touchend',stickEnd,{passive:false});
+    stick.addEventListener('touchcancel',stickEnd,{passive:false});
+
+    // ----- Bouton SAUT (le plus à droite) -----
+    const jump=document.getElementById('tc-jump');
+    jump.addEventListener('touchstart',e=>{ if(I())I().jumpPress(); e.preventDefault(); },{passive:false});
+    jump.addEventListener('touchend',  e=>{ if(I())I().jumpRelease(); e.preventDefault(); },{passive:false});
+    jump.addEventListener('touchcancel',e=>{ if(I())I().jumpRelease(); e.preventDefault(); },{passive:false});
+
+    // ----- Bouton POUVOIR (à gauche du saut) -----
+    const pw=document.getElementById('tc-power');
+    pw.addEventListener('touchstart',e=>{ if(I())I().power(); e.preventDefault(); },{passive:false});
+    pw.addEventListener('touchend',e=>e.preventDefault(),{passive:false});
+  }
+  // ── ÉTAT DE PROGRESSION DU JOUEUR (canards, déblocages) ──
+  let PLAYER = { ducks:0, spent:0, coins:{1:0,2:0,3:0}, secret:{1:false,2:false,3:false},
+                 unlocked:[], levels_done:[] };
+
+  // Solde de canards dépensables = total gagné - total dépensé.
+  function duckBalance(){ return Math.max(0, (PLAYER.ducks||0) - (PLAYER.spent||0)); }
+
+  // Un niveau est "100% canards" si 3 canards normaux + le secret obtenus.
+  function levelFullyCollected(lv){ return (PLAYER.coins[lv]||0) >= 3 && !!PLAYER.secret[lv]; }
+
+  // Statut d'un perso : 'owned' (jouable), 'buyable' (assez de canards), 'locked' (condition non remplie).
+  function charStatus(cid){
+    const u = CHARS[cid].unlock || {type:'free'};
+    if(u.type==='free') return {state:'owned'};
+    // achat explicite déjà effectué ?
+    if(PLAYER.unlocked.includes(cid)) return {state:'owned'};
+    if(u.type==='alllevels'){
+      const done = [1,2,3].every(l=>PLAYER.levels_done.includes(l));
+      return {state: done?'owned':'locked', cond:u.label, auto:true};
+    }
+    if(u.type==='allducks'){
+      const all = [1,2,3].every(levelFullyCollected);
+      return {state: all?'owned':'locked', cond:u.label, auto:true};
+    }
+    if(u.type==='buy'){
+      const can = duckBalance() >= u.cost;
+      return {state: can?'buyable':'locked', cond:u.label, cost:u.cost, buy:true};
+    }
+    return {state:'locked', cond:u.cond||''};
+  }
+  function charOwned(cid){ return charStatus(cid).state==='owned'; }
+  // expose pour le moteur (sécurité : empêcher de lancer un perso non possédé)
+  window.CCB_charOwned = charOwned;
+
+  function updateDuckTotal(n){
+    if(n!=null) PLAYER.ducks=n;
+    const bal=duckBalance();
+    const el=document.getElementById('duck-total-n'); if(el) el.textContent=bal;
+    const s=document.getElementById('stat-ducks'); if(s) s.textContent=bal;
+  }
+  function applyLevelCoins(got, level, secretGot){
+    if(level){ PLAYER.coins[level]=got||0; PLAYER.secret[level]=!!secretGot; }
+    const wrap=document.getElementById('coinslots-'+(level||currentLevel||1)); if(!wrap) return;
+    const slots=wrap.querySelectorAll('.cs:not(.secret)');
+    slots.forEach((s,i)=> s.classList.toggle('got', i < (got||0)));
+    // canard SECRET turquoise : pas d'emplacement réservé. On l'ajoute (une seule fois)
+    // uniquement s'il a été obtenu ; sinon on le retire s'il était présent.
+    let sec = wrap.querySelector('.cs.secret');
+    if(secretGot){
+      if(!sec){
+        sec=document.createElement('img');
+        sec.className='cs secret got';
+        sec.src='duck.svg';
+        sec.alt='Canard rare';
+        sec.title='Canard rare';
+        // teinte turquoise + halo, pour le distinguer du doré
+        sec.style.filter='hue-rotate(135deg) saturate(1.4) drop-shadow(0 0 6px #1fd6c6)';
+        wrap.appendChild(sec);
+      }
+    } else if(sec){ sec.remove(); }
+  }
+  async function loadProgress(){
+    if(!currentUser) return;
+    try{
+      const p=await Backend.getProgress(currentUser);
+      const u=await Backend.getUnlocks(currentUser);
+      PLAYER.spent=u.spent||0; PLAYER.unlocked=u.unlocked||[]; PLAYER.levels_done=u.levels_done||[];
+      applyLevelCoins(p.coins_l1||0, 1, p.secret_l1);
+      applyLevelCoins(p.coins_l2||0, 2, p.secret_l2);
+      applyLevelCoins(p.coins_l3||0, 3, p.secret_l3);
+      updateDuckTotal(p.ducks);     // après spent chargé, pour afficher le solde
+      updateLevelLocks();
+    }
+    catch(e){ updateDuckTotal(0); applyLevelCoins(0,1); applyLevelCoins(0,2); applyLevelCoins(0,3); }
+    renderJeuTab();
+  }
+
+  // Verrouillage des NIVEAUX : N1 ouvert ; N2 si N1 fini ; N3 si N2 fini.
+  function levelUnlocked(lv){
+    if(lv===1) return true;
+    if(lv===2) return PLAYER.levels_done.includes(1);
+    if(lv===3) return PLAYER.levels_done.includes(2);
+    return false;
+  }
+  function updateLevelLocks(){
+    [1,2,3].forEach(lv=>{
+      const row=document.querySelector('.levelrow[data-lvl="'+lv+'"]') || document.querySelectorAll('.levelrow')[lv-1];
+      if(!row) return;
+      const open=levelUnlocked(lv);
+      row.classList.toggle('locked', !open);
+      let lk=row.querySelector('.lvl-lock');
+      if(!open){
+        if(!lk){ lk=document.createElement('div'); lk.className='lvl-lock'; lk.textContent='🔒 Termine le niveau précédent'; row.appendChild(lk); }
+      } else if(lk){ lk.remove(); }
+    });
+  }
+  window.onLevelComplete=async function(timeMs,cid,coins,secret){
+    const rec=document.getElementById('end-rec'); rec.textContent='';
+    const gained = coins + (secret?2:0);   // un canard secret vaut DEUX canards au compteur
+    if(currentUser){
+      // snapshot des persos auto possédés AVANT, pour détecter les nouveaux déblocages
+      const autoBefore = CHAR_IDS.filter(id=>{const s=charStatus(id);return s.auto;}).filter(charOwned);
+      try{
+        const r=await Backend.submitScore(currentUser,currentLevel,cid,timeMs);
+        rec.textContent=r.improved?'★ Nouveau record personnel !':'Record actuel : '+fmt(r.best);
+      }catch(e){ rec.textContent='Score non enregistré ('+(e.message||'erreur')+')'; }
+      try{
+        const prog=await Backend.addProgress(currentUser,currentLevel,coins,gained,!!secret);
+        const cl = currentLevel===3 ? prog.coins_l3 : (currentLevel===2 ? prog.coins_l2 : prog.coins_l1);
+        const sc = currentLevel===3 ? prog.secret_l3 : (currentLevel===2 ? prog.secret_l2 : prog.secret_l1);
+        applyLevelCoins(cl||0, currentLevel, sc);
+        updateDuckTotal(prog.ducks);
+      }catch(e){}
+      // niveau terminé : on le mémorise (débloque le niveau suivant)
+      try{
+        const done=await Backend.markLevelDone(currentUser, currentLevel);
+        PLAYER.levels_done = done || PLAYER.levels_done;
+        updateLevelLocks();
+      }catch(e){}
+      // déblocages AUTOMATIQUES nouvellement atteints (Matteo : 3 niveaux ; Oscar : tous canards)
+      const autoAfter = CHAR_IDS.filter(id=>{const s=charStatus(id);return s.auto;}).filter(charOwned);
+      const newly = autoAfter.filter(id=>!autoBefore.includes(id));
+      if(newly.length){ _pendingUnlocks=newly.slice(); try{ sessionStorage.setItem('ccb_unlock_anim', JSON.stringify(newly)); }catch(e){} }   // joués au retour à la sélection
+      refreshLeaderboards();
+    }
+  };
+  let _pendingUnlocks=[];
+  // quand on revient à l'accueil/sélection, on joue les animations de déblocage en attente
+  function flushPendingUnlocks(){
+    if(!_pendingUnlocks || !_pendingUnlocks.length) return;
+    const cid=_pendingUnlocks.shift();
+    playUnlockAnimation(cid);
+    // enchaîne le suivant après fermeture
+    const chain=setInterval(()=>{ if(!document.getElementById('unlock-ov')){ clearInterval(chain); flushPendingUnlocks(); } }, 300);
+  }
+  function restartRun(){ if(window.restartLevel) window.restartLevel(); var _e=document.getElementById('end');_e.style.display='none';_e.classList.remove('show'); }
+  function quitToChars(){ if(window.Audio2)Audio2.stopMusic(); sessionStorage.setItem('ccb_back',JSON.stringify({user:currentUser,level:currentLevel})); location.reload(); }
+
+  // ▼▼▼ MODIFICATION 2 : Restauration automatique de la session avec Backend.getSession() ▼▼▼
+  (function resume(){
+    const r=sessionStorage.getItem('ccb_resume'), b=sessionStorage.getItem('ccb_back');
+    if(r){
+      sessionStorage.removeItem('ccb_resume'); const o=JSON.parse(r);
+      currentUser=o.user; currentLevel=o.level; document.getElementById('who-name').textContent=currentUser;
+      window.SELECTED_CID=o.cid; show('play');
+      window.selectLevelData(currentLevel);
+      document.getElementById('play-info').textContent=CHARS[o.cid].name+' · '+LEVELS[o.level];
+      setupTouchForChar(o.cid);
+      const s=document.createElement('script'); s.src='engine.js';
+      s.onload=()=>{ engineLoaded=true; window.startGame(); bindTouchControls(); if(window.Audio2)Audio2.playMusic(currentLevel); }; document.body.appendChild(s);
+    } else if(b){
+      sessionStorage.removeItem('ccb_back'); const o=JSON.parse(b);
+      currentUser=o.user; currentLevel=o.level; document.getElementById('who-name').textContent=currentUser;
+      loadProgress(); refreshLeaderboards(); gotoChars(o.level);
+    } else if (Backend && Backend.getSession && Backend.getSession()) {
+      // Reconnexion automatique et affichage de l'écran des niveaux !
+      currentUser = Backend.getSession();
+      document.getElementById('who-name').textContent = currentUser;
+      loadProgress(); refreshLeaderboards(); show('levels');
+    }
+  })();
+  // ▲▲▲ FIN MODIFICATION 2 ▲▲▲
+  </script>
+</html>
